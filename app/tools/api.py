@@ -94,6 +94,23 @@ async def book_service(
         patient, society = patient_society_row
         society_tz = ZoneInfo(society.timezone)
 
+        # A redelivery must return the original booking even after its slot has passed.
+        existing_stmt = select(ServiceRequest).where(ServiceRequest.request_id == req_uuid)
+        existing = (await session.execute(existing_stmt)).scalar_one_or_none()
+        if existing is not None:
+            if existing.patient_id != patient.id:
+                return {"ok": False, "error_code": "REQUEST_ID_CONFLICT",
+                        "message": "Request ID belongs to a different patient."}
+            clinician_name = await session.scalar(
+                select(Clinician.name).where(Clinician.id == existing.clinician_id)
+            )
+            return {
+                "ok": True, "booking_id": str(existing.id), "clinician": clinician_name,
+                "service": existing.service, "subtype": existing.subtype,
+                "scheduled_for": existing.scheduled_for.isoformat(),
+                "status": existing.status, "replayed": True,
+            }
+
         # Parse scheduled_for and ensure timezone awareness in society_tz
         if isinstance(scheduled_for, str):
             dt = datetime.fromisoformat(scheduled_for)
@@ -267,6 +284,25 @@ async def book_service(
             await session.rollback()
             # Database rejected the write: translate IntegrityError by constraint name
             err_msg = str(exc)
+
+            # A concurrent delivery can collide on the slot index before PostgreSQL
+            # reports the request-id conflict. Replay the committed request first.
+            existing = (await session.execute(
+                select(ServiceRequest).where(ServiceRequest.request_id == req_uuid)
+            )).scalar_one_or_none()
+            if existing is not None:
+                if existing.patient_id != patient_id_val:
+                    return {"ok": False, "error_code": "REQUEST_ID_CONFLICT",
+                            "message": "Request ID belongs to a different patient."}
+                clinician_name = await session.scalar(
+                    select(Clinician.name).where(Clinician.id == existing.clinician_id)
+                )
+                return {
+                    "ok": True, "booking_id": str(existing.id), "clinician": clinician_name,
+                    "service": existing.service, "subtype": existing.subtype,
+                    "scheduled_for": existing.scheduled_for.isoformat(),
+                    "status": existing.status, "replayed": True,
+                }
 
             if "uq_active_slot" in err_msg or (
                 hasattr(exc.orig, "diag") and exc.orig.diag.constraint_name == "uq_active_slot"

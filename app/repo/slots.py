@@ -35,6 +35,8 @@ def compute_window_slots(
     tz: ZoneInfo,
 ) -> list[datetime]:
     """Generate discrete slot start datetimes fitting entirely within [start, end]."""
+    if slot_minutes <= 0:
+        raise ValueError("slot_minutes must be positive")
     start_t = parse_time(start_time_str)
     end_t = parse_time(end_time_str)
 
@@ -73,8 +75,7 @@ def get_clinician_slots_for_date(
             )
             slots.extend(window_slots)
 
-    slots.sort()
-    return slots
+    return sorted(set(slots))
 
 
 def is_on_slot_grid(

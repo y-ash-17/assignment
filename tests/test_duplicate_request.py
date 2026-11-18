@@ -107,3 +107,19 @@ async def test_duplicate_symptom_log_idempotency():
     assert res2["ok"] is True
     assert res2["replayed"] is True
     assert res2["log_id"] == res1["log_id"]
+
+
+@pytest.mark.asyncio
+async def test_booking_replay_after_slot_passes(monkeypatch):
+    """Redelivery returns the original booking even after the booking time."""
+    now = clock.now(KOLKATA_TZ)
+    days_ahead = (2 - now.weekday() + 7) % 7 + 7
+    target = now.date() + timedelta(days=days_ahead)
+    slot = datetime(target.year, target.month, target.day, 10, 0, tzinfo=KOLKATA_TZ)
+    request_id = uuid.uuid4()
+    first = await book_service("pat_001", "DOCTOR", "GENERAL_PHYSICIAN", slot, request_id)
+    assert first["ok"]
+    monkeypatch.setattr(clock, "now", lambda tz=None: slot + timedelta(days=1))
+    replay = await book_service("pat_001", "DOCTOR", "GENERAL_PHYSICIAN", slot, request_id)
+    assert replay["ok"] and replay["replayed"]
+    assert replay["booking_id"] == first["booking_id"]
